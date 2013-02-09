@@ -1,5 +1,5 @@
 CC = clang
-CFLAGS = -g -Os -std=c11 -Wall -Werror-implicit-function-declaration
+CFLAGS = -g -Os -fno-omit-frame-pointer -std=c11 -Wall -Werror-implicit-function-declaration
 
 all: libcont.a test
 
