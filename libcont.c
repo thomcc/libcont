@@ -15,9 +15,14 @@ struct cont {
   intptr_t v;
   uintptr_t *stk;
   // [0]  : base of stack
+  // currently this is the same as the global above
+  // however, if we want to operate on different threads, we need to store
+  // the stack base in the continuation structure.  Ideally, we wouldn't
+  // even calculate it inside here, and instead we'd make the client provide
+  // it when they wanted to capture a continuation...
   // [1]  : %rsp
   // [2]  : %rbp
-  // [3..]: stack dump
+  // [3..]: stack dump, starting with a reference to the continuation struct
 };
 
 #if !(defined(__x86_64) || defined(__x86_64__))
@@ -50,9 +55,10 @@ cont_t cont_capture(cont_t c) {
   c->stk[2] = (uintptr_t)sp3;
   c->stk[3] = 0;
   __asm__(
-    // callee-saved on x86 64
-    "movq %%rbx, 0x20(%0);"
-    "movq %%r12, 0x28(%0);"
+    // saved on x86 64
+    // stack pointer is saved above
+    "movq %%rbx, 0x20(%0);" // frame pointer
+    "movq %%r12, 0x28(%0);" // r12-r15
     "movq %%r13, 0x30(%0);"
     "movq %%r14, 0x38(%0);"
     "movq %%r15, 0x40(%0);"
@@ -66,22 +72,20 @@ int cont_throw(cont_t c) {
   uintptr_t *start, *end;
   end = (uintptr_t*)c->stk[0];
   start = (uintptr_t*)c->stk[1];
-  c->stk[3] = (uintptr_t)c;
+
   __asm__(
-    // move stack pointer
-    "movq 0x8(%2), %%rsp;"
-    "movq 0x10(%2), %%rbp;"
-    "movq %2, %%rbx;"
-    "addq $0x48, %2;"
-    // fill in stack
-  "fill:"
-    "movq (%2), %%rax;"
-    "addq $0x8, %0;"
-    "movq %%rax, (%0);"
-    "addq $0x8, %2;"
-    "cmpq %0, %1;"
-    "jne fill;"
-    // resume
+    "movq 0x8(%2), %%rsp;" // copy stack ptr to 2nd spot
+    "movq 0x10(%2), %%rbp;" // copy frame pointer to 4th spot
+    "movq %2, %%rbx;" // rbx = c->stack. used after loop
+    "addq $0x48, %2;" // c->stack += 0x48, offset of saved registers
+  "copy_stack:"
+    "movq (%2), %%rax;" // rax = *c->stack
+    "addq $0x8, %0;" // start += 2
+    "movq %%rax, (%0);" // *start = rax
+    "addq $0x8, %2;" // c->stack += 2
+    "cmpq %0, %1;" // if (start != end)
+    "jne copy_stack;" // goto copy_stack
+    // reset saved registers
     "movq 0x18(%%rbx), %%rax;"
     "movq $0x0, 0x18(%%rbx);"
     "movq 0x28(%%rbx), %%r12;"
@@ -92,7 +96,7 @@ int cont_throw(cont_t c) {
     "leave;"
     "ret"
     ::"r"(start), "r"(end), "r"(c->stk)
-    :"%rax", "%rsp", "%rbx"
+    : "%rax", "%rsp", "%rbx"
   );
   Expect(0, "Unreachable");
   return 0; // silence compiler warning
