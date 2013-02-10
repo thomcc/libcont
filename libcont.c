@@ -74,17 +74,17 @@ int cont_throw(cont_t c) {
   start = (uintptr_t*)c->stk[1];
 
   __asm__(
-    "movq 0x8(%2), %%rsp;" // copy stack ptr to 2nd spot
-    "movq 0x10(%2), %%rbp;" // copy frame pointer to 4th spot
-    "movq %2, %%rbx;" // rbx = c->stack. used after loop
-    "addq $0x48, %2;" // c->stack += 0x48, offset of saved registers
+    "movq 0x8(%2), %%rsp;" // restore stack pointer
+    "movq 0x10(%2), %%rbp;" // restore freame pointer
+    "movq %2, %%rbx;" // rbx = c->stack
+    "addq $0x48, %2;" // c->stack += 9
   "copy_stack:"
-    "movq (%2), %%rax;" // rax = *c->stack
-    "addq $0x8, %0;" // start += 2
-    "movq %%rax, (%0);" // *start = rax
-    "addq $0x8, %2;" // c->stack += 2
-    "cmpq %0, %1;" // if (start != end)
-    "jne copy_stack;" // goto copy_stack
+    "movq (%2), %%rax;" // rax = *c->stack;
+    "addq $0x8, %0;" // ++start;
+    "movq %%rax, (%0);" // *start = rax;
+    "addq $0x8, %2;" // ++c->stack;
+    "cmpq %0, %1;" // if (start != end) goto copy_stack
+    "jne copy_stack;"
     // reset saved registers
     "movq 0x18(%%rbx), %%rax;"
     "movq $0x0, 0x18(%%rbx);"
