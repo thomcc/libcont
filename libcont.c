@@ -10,6 +10,7 @@
 
 static char *stack_base = 0;
 
+
 struct cont {
   size_t len;
   intptr_t v;
@@ -37,7 +38,6 @@ struct cont {
 cont_t cont_new(void) {
   return (cont_t)calloc(1, sizeof(struct cont*));
 }
-
 // NB: must compile with -fno-omit-frame-pointer
 cont_t cont_capture(cont_t c) {
   ptrdiff_t n;
@@ -50,19 +50,25 @@ cont_t cont_capture(cont_t c) {
   if (!c) c = cont_new();
   c->stk = realloc(c, sizeof(*c) + sizeof(uintptr_t) * (3 + NSAVED + n));
   c->len = n+3;
+
   c->stk[0] = (uintptr_t)sp1;
   c->stk[1] = (uintptr_t)sp2;
   c->stk[2] = (uintptr_t)sp3;
   c->stk[3] = 0;
+  // loosely based on http://www.scs.stanford.edu/histar/src/lind/os-Linux/setjmp.S
+  // and https://github.com/promovicz/dietlibc/blob/master/x86_64/setjmp.S
   __asm__(
-    // saved on x86 64
+    // saved by setjmp on x86 64 according to header file.
+    // rbp (frame) is explicitly c->stk[1]
+    /* rip, rbp, rsp, rbx, r12, r13, r14, r15 */
     // stack pointer is saved above
     "movq %%rbx, 0x20(%0);" // frame pointer
-    "movq %%r12, 0x28(%0);" // r12-r15
+    "movq %%r12, 0x28(%0);" // r12-r15 see links above
     "movq %%r13, 0x30(%0);"
     "movq %%r14, 0x38(%0);"
     "movq %%r15, 0x40(%0);"
     ::"r"(c->stk)
+    // none clobbered
   );
   memcpy(c->stk+4+NSAVED, start+1, sizeof(intptr_t)*(n-1));
   return c;
@@ -72,30 +78,35 @@ int cont_throw(cont_t c) {
   uintptr_t *start, *end;
   end = (uintptr_t*)c->stk[0];
   start = (uintptr_t*)c->stk[1];
-
+  // loosely based on http://www.scs.stanford.edu/histar/src/lind/os-Linux/setjmp.S
+  // and https://github.com/promovicz/dietlibc/blob/master/x86_64/setjmp.S
   __asm__(
-    "movq 0x8(%2), %%rsp;" // restore stack pointer
-    "movq 0x10(%2), %%rbp;" // restore freame pointer
-    "movq %2, %%rbx;" // rbx = c->stack
-    "addq $0x48, %2;" // c->stack += 9
-  "copy_stack:"
-    "movq (%2), %%rax;" // rax = *c->stack;
-    "addq $0x8, %0;" // ++start;
-    "movq %%rax, (%0);" // *start = rax;
-    "addq $0x8, %2;" // ++c->stack;
-    "cmpq %0, %1;" // if (start != end) goto copy_stack
-    "jne copy_stack;"
-    // reset saved registers
+    "movq 0x8(%2), %%rsp;"   // restore stack pointer
+    "movq 0x10(%2), %%rbp;"  // restore freame pointer
+    "movq %2, %%rbx;"        // rbx = c->stack
+    "addq $0x48, %2;"         // c->stack += 9, offset from saved registers
+  "copy_stack:"              // copy the stack from %2 (c->stack) to %0 (start)
+    "movq (%2), %%rax;"      // rax <- *stack
+    "addq $0x8, %0;"         // ++start; (interleaved)
+    "movq %%rax, (%0);"      // *start <- rax;
+    "addq $0x8, %2;"         // ++c->stack;
+    "cmpq %0, %1;"           // if (start != end)
+    "jne copy_stack;"        //   goto copy_stack
     "movq 0x18(%%rbx), %%rax;"
-    "movq $0x0, 0x18(%%rbx);"
+    // restore bx
+    "movq $0x0, 0x18(%%rbx);" // restore previous
+    // restore regs 12-15, see links above
+    // and assembly block in capture_cont for (same) offsets
     "movq 0x28(%%rbx), %%r12;"
     "movq 0x30(%%rbx), %%r13;"
     "movq 0x38(%%rbx), %%r14;"
     "movq 0x40(%%rbx), %%r15;"
-    "movq 0x20(%%rbx), %%rbx;"
+    "movq 0x20(%%rbx), %%rbx;" // needs to be last
     "leave;"
-    "ret"
+    "ret" // get return address from stack (which we modified) and set rip
+    // avoid overwriting our stack frame as we use it
     ::"r"(start), "r"(end), "r"(c->stk)
+    // clobbered rax, rbx, and stack pointer.
     : "%rax", "%rsp", "%rbx"
   );
   Expect(0, "Unreachable");
